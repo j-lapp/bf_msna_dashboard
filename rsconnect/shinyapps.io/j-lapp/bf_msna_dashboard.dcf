@@ -1,0 +1,10 @@
+name: bf_msna_dashboard
+title:
+username:
+account: j-lapp
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3839446
+bundleId: 4470237
+url: https://j-lapp.shinyapps.io/bf_msna_dashboard/
+when: 1618403900.27767

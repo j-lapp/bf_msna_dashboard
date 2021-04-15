@@ -1,0 +1,318 @@
+###############################################################################################
+############################# Burkina Faso MSNA Dashboard - RShiny ############################
+###############################################################################################
+
+############################# import packages #################################################
+
+# spatial analysis tools
+library(sf)                     # vector data tools
+library(lwgeom)
+library(raster)                 # raster data tools
+library(leaflet)                # plot interactive maps
+library(geojsonio)              # deal with geojson layers
+library(spatialEco)             # calculate zonal statistics
+library(rmapshaper)             # tools for simplifying polygons
+
+# additional packages
+library(dplyr)                  # data manipulation
+library(purrr)
+library(shiny)                  # App building tools
+library(shinydashboard)         # calculate zonal statistics
+library(shinyjs)                # javascript plugin for Shiny
+library(widgetframe)            # app widgets
+library(rsconnect)              # connect to online shiny server
+library(highcharter)            # interactive graph packages
+library(readxl)                 # import excel files
+library(lubridate)              # smooth date manipulation
+library(htmltools)              # html scripting for R
+library(expss)                  # vlookup for R
+library(htmlwidgets)
+library(janitor)
+library(data.table)
+
+source("color_vars.R")
+source("functions.R")
+
+theme_set(theme_minimal())
+
+header.true <- function(df) {
+  names(df) <- as.character(unlist(df[1,]))
+  df[-1,]
+}
+
+
+# read in data
+msna_admin2_data <- read_excel("table_data/reach_msna_tableaux_resultats_sectoriels_admin_2_grp_aout_2020.xlsx", 
+                               sheet= "summary_stats_admin_2_grp", 
+                               skip = 1,
+                               .name_repair = make_clean_names) 
+
+# add unique indicator ID
+msna_admin2_data$indicateur_id <- row.names(msna_admin2_data)
+
+ind_num_vector <- row.names(msna_admin2_data)
+
+msna_admin2_data %<>% relocate(indicateur_id, .after = sous_ensemble_de_donnee)
+
+# indicateurs comme un vecteur pour le lookup table
+indicator_lookup <- msna_admin2_data %>% 
+  dplyr::select(question_de_recherche:indicateur_id)
+
+# drop columns added to lookup
+msna_admin2_data %<>% dplyr::select(-c(question_de_recherche, sous_question_de_recherche, groupe_de_population, indicateur, sous_ensemble_de_donnee))
+
+# transpose dataset
+msna_admin2_data <- t(msna_admin2_data) %>%
+  janitor::row_to_names(row_number = 1) %>% 
+  as.data.frame()
+
+msna_admin2_data <- data.table::setDT(msna_admin2_data, keep.rownames = TRUE)[]
+
+colnames(msna_admin2_data)[1] <- c("ADM2_FR")
+
+msna_admin2_data %<>% map_if(names(.) %in% ind_num_vector, as.numeric, .else = as.character)
+
+#########################################################################################
+################ Read spatial data and convert to SF Objects
+
+# ###################  DISTRICTS #############
+# read in district shapefile layer
+admin2 <- st_read("spatial_data/admin2.geojson", options = "ENCODING=UTF-8") %>% 
+  mutate(ADM2_FR = tolower(ADM2_FR))
+
+admin2_simple <- rmapshaper::ms_simplify(admin2, keep=0.1) 
+
+# read in governorate layer
+admin1 <- rmapshaper::ms_dissolve(admin2_simple, field="ADM1_FR")
+
+# # convert gov boundaries to lines to display as boundaries on maps
+admin1_lines    <- st_cast(admin1,"MULTILINESTRING")
+admin1_lines    <- st_cast(admin1_lines,"LINESTRING")
+
+# create labels for admin1
+admin1_labels     <- st_centroid(admin1)
+############################################################################################
+########### join data to admin2 shapefile
+
+# join data to admin2 spatial layer
+admin2_data <- left_join(admin2_simple, msna_admin2_data, by= "ADM2_FR", copy=TRUE) 
+
+names(admin2_data) <- gsub(x = names(admin2_data), pattern = "X", replacement = "")  
+
+
+# filter out columns that contain all NA values
+admin2_data <-  (admin2_data[colSums(!is.na(admin2_data)) > 0])
+
+# admin1 label format
+admin1_labels_halo <- sprintf(
+  '<strong><span style="font-size: 12px; color: %s">%s</span></strong>',
+  reach_grey, admin1_labels$ADM1_FR)%>% 
+  lapply(htmltools::HTML)
+
+# bounding box
+bbox <- st_bbox(admin1) %>% 
+  as.vector()
+
+bbox[1] <- bbox[1] - 4
+bbox[3] <- bbox[3] + 0.2
+
+bbox[2] <- bbox[2] - 0.2
+bbox[4] <- bbox[4] + 0.2
+
+#########################################################################################
+################################## UI!!! ################################################
+#########################################################################################
+
+
+ui <- bootstrapPage(title = HTML(sprintf("<span style='font-size:30px; color: %s; padding-left: 20px; background: transparent'>2020 Burkina Faso MSNA</span>",reach_grey)),
+  tags$style(type = "text/css", "html, body {width:100%;height:100%}"),
+  tags$head(
+    # custom CSS
+    includeCSS("styles.css")
+  ),
+  leafletOutput("mapOverview", width = "100%", height = "100%"),
+  absolutePanel(id = "controls", class = "panel panel-default",
+               draggable = F, top = 75, right = "auto", left = 20,
+               minWidth = 295,
+               selectInput("popgroup", "Groupe de population:",
+                           width = 250,
+                           choices = c("PDI", "Communauté hôte")),
+               selectInput("sector", "Question de recherche:",
+                           width = 250,
+                           choices = sort(unique(as.character(indicator_lookup$question_de_recherche)),
+                                          decreasing = FALSE)),
+               selectInput("indicator", "Indicateur:",
+                           
+                           choices = sort(indicator_lookup$indicateur,
+                                          decreasing = FALSE),
+                           selected = "10")
+  ),
+  absolutePanel(id = "info_box", class = "panel panel-default", fixed = TRUE,
+                draggable = F, top = 75, left = "auto", right = 20,
+                width = 320,
+                
+                p(htmlOutput("infobox")))
+)
+
+##################################################################################################
+################################## SERVER side ###################################################
+##################################################################################################
+
+server <- function(input, output, session) {
+  output$mapOverview <- renderLeaflet({
+    
+    # put population group input into a variable
+    select_popgroup <- as.character(input$popgroup)
+    
+    # format popgroup for display in legend title
+    popgroup        <- case_when(select_popgroup == "PDI" ~ "PDI",
+                                 select_popgroup == "Communauté hôte" ~ "Communauté hôte")
+    
+    # filter indicator for selected sector
+    selected_ind_group <- indicator_lookup %>%
+      filter(groupe_de_population == popgroup)
+    
+    # put dropdown input into a variable
+    select_indicator <- as.character(input$indicator)
+    select_ind_num   <- as.character(vlookup_df(select_indicator, indicator_lookup, result_column = 'indicateur_id', lookup_column = 'indicateur'))
+    
+    # put dynamic variable into a short value name -- very important
+    select_value <- admin2_data[[sprintf("%s", select_ind_num)]]
+    
+    # define palette to be used in the choropleth maps
+    reach_red_pal <- red_palette_func(select_value)
+    
+    # admin2 tooltip on hover
+    admin2_tooltip <- sprintf(
+      '<strong><span style="font-size: %s; color: %s;">%s </span></strong><br><strong><span style="font-size: %s; color: %s;">%s</span></strong><br><strong><span style="font-size: %s; color: %s;">%s %%</span></strong>',
+      ifelse(is.na(as.numeric(select_value)), "14px", "20px"),
+      ifelse(is.na(as.numeric(select_value)), reach_grey, reach_red),
+      admin2_simple$ADM2_FR, 
+      ifelse(is.na(as.numeric(select_value)), "10px", "15px"),
+      reach_grey, 
+      admin2_simple$ADM1_FR,
+      ifelse(is.na(as.numeric(select_value)), "10px", "20px"),
+      ifelse(is.na(as.numeric(select_value)), reach_grey, reach_red_pal(as.numeric(select_value))),
+      ifelse(!is.na(select_value), formatC(as.numeric(select_value),format="f", big.mark=",", digits=1), "not assessed"))%>%
+      lapply(htmltools::HTML)
+    
+    bf_map <-leaflet(options=leafletOptions(zoomControl =F,zoomSnap = 0.01, zoomDelta = 0.01, 
+                                            dragging = TRUE, attributionControl = FALSE,
+                                            easeLinearity = 0.35, maxZoom = 11, minZoom = 7)) %>%
+      # add base map layer from carto DB
+      addProviderTiles(providers$CartoDB.PositronNoLabels, 
+                       options = providerTileOptions(opacity = 0.6)) %>%
+    # add districts layer
+    addPolygons(data         = admin2_simple,
+                color        = white,
+                fillColor    = ifelse(is.na(as.numeric(select_value)), 
+                                      reach_lt_grey, 
+                                      reach_red_pal(as.numeric(select_value))),
+                label        = admin2_tooltip,
+                weight       = 0.2,
+                smoothFactor = 0.5,
+                opacity      = 1,
+                fillOpacity  = 0.9,
+                options      = list(zIndex = 400),
+                highlightOptions = highlightOptions(fillColor    = white,
+                                                    color        = white,
+                                                    weight       = 2,
+                                                    opacity      = 0.9,
+                                                    fillOpacity  = 0.4,
+                                                    bringToFront = F),
+                labelOptions = labelOptions(noHide      = F,
+                                            opacity     = 0.9,
+                                            direction   = 'left',
+                                            offset      = c(-10,0),
+                                            textOnly    = F,
+                                            style       = list(
+                                              "padding" = "3px 8px",
+                                              "font-family" = "Arial Narrow"
+                                            ))) %>%
+      
+    # Add governorate lines for aesthetics
+    addPolylines(data        = admin1_lines,
+                 color       = reach_grey,
+                 weight      = 1.1,
+                 opacity     = 1.0,
+                 options     = list(zIndex = 300))%>%
+    # add governorate labelling
+    addLabelOnlyMarkers(data         = admin1_labels,
+                        label        = admin1_labels_halo,
+                        labelOptions = labelOptions(noHide    = T,
+                                                    direction = 'center',
+                                                    textOnly  = T,
+                                                    style     = list(
+                                                      "padding"     = "3px 8px",
+                                                      "font-family" = "Arial",
+                                                      "text-shadow" = sprintf("-1px 0 %s, 0 1px %s, 1px 0 %s, 0 -1px %s, 0 0 7px %s", white, white, white, white, white)
+                                                    )))  %>% 
+      # set view coordinates
+      fitBounds(bbox[1], bbox[2], bbox[3], bbox[4]) %>% 
+
+      # add gradient legend
+      leaflet::addLegend(position  = "bottomright",
+                         pal       = reach_red_pal,
+                         values    = select_value,
+                         na.label  = "Not assessed",
+                         labFormat = labelFormat(
+                           prefix = "    "),
+                         title   = "Legend<br>",
+                         bins    = 5,
+                         opacity = 1) %>%
+      # add scale
+      addScaleBar(position = "bottomleft", scaleBarOptions(imperial = FALSE))
+    
+  })
+  
+  # render info box for indicator select
+  output$infobox <- renderUI({
+    # get population group
+    select_popgroup <- as.character(input$popgroup)
+    # remove special characters from the IDP categories
+    popgroup        <- case_when(select_popgroup == "PDI" ~ "PDI",
+                                 select_popgroup == "Communauté hôte" ~ "Communauté hôte",
+                                 TRUE ~ "")
+    
+    # get sector
+    select_sector_input <- input$sector
+    select_indicator    <- input$indicator
+    
+    indicator_info <- indicator_lookup %>%
+      filter(indicateur == select_indicator & question_de_recherche == select_sector_input)
+    
+    HTML(sprintf("style='color: %s;'><span style='color: %s; font-size: 30px; line-height: 1.6;'><strong>    %s</strong></span><br><span style=' font-size: 20px; color: %s'><strong> %s</span><hr>%s</strong>",
+                 reach_red, 
+                 reach_red, 
+                 select_sector_input, 
+                 reach_grey, 
+                 popgroup,  
+                 indicator_info$indicateur),
+         '<style type="text/css"> .shiny-html-output { font-size: 15px; color:#58585A
+         font-family: Arial} </style>')
+})
+  
+  
+  observe({
+    select_popgroup <- input$popgroup
+    select_sector <- as.character(input$sector)
+
+    # filter indicator for selected pop group
+    selected_ind_group <- indicator_lookup %>%
+      filter(case_when(select_popgroup == "PDI" ~ groupe_de_population == "PDI",
+                       select_popgroup == "Communauté hôte" ~ groupe_de_population == "Communauté hôte"))
+
+    # filter indicator for selected sector
+    selected_ind_group <- indicator_lookup %>%
+      filter(question_de_recherche == select_sector)
+
+    updateSelectInput(session, "indicator",
+                      choices = unique(as.character(selected_ind_group$indicateur)))
+  })
+}
+
+runApp(shinyApp(ui, server),launch.browser = TRUE)
+
+# shinyApp(ui, server)
+
+

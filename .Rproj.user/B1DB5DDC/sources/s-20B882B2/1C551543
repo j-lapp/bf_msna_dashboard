@@ -1,0 +1,29 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1616407792540.000,
+    "dirty" : false,
+    "encoding" : "",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "1C551543",
+    "lastKnownWriteTime" : 8031678592140821364,
+    "last_content_update" : 1616407792540,
+    "path" : null,
+    "project_path" : null,
+    "properties" : {
+        "cacheKey" : "12D105A4",
+        "caption" : "msna_admin2_data",
+        "contentUrl" : "grid_resource/gridviewer.html?env=&obj=msna_admin2_data&cache_key=12D105A4",
+        "displayedObservations" : "22",
+        "environment" : "",
+        "object" : "msna_admin2_data",
+        "preview" : "0",
+        "totalObservations" : "22",
+        "variables" : "2134"
+    },
+    "relative_order" : 5,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_dataframe"
+}

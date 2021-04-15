@@ -1,0 +1,28 @@
+{
+    "id": "BD4ABC0F",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1618406118465.0,
+    "source_on_save": false,
+    "relative_order": 7,
+    "properties": {
+        "id": "6b597529fe7149e2b85b19c83217902b",
+        "name": "admin2_data_filtered",
+        "title": "admin2_data_filtered",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 2531906049332683555,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1618406118465,
+    "read_only": false,
+    "read_only_alternatives": []
+}

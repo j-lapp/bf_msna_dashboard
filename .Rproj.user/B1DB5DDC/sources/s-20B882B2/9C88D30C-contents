@@ -1,0 +1,30 @@
+admin1_labels <- NULL
+
+admin1_preprossing <- function (admin1_layer) {
+  
+  # # convert gov boundaries to lines to display as boundaries on maps
+  admin1_lines    <- st_cast(admin1_layer,"MULTILINESTRING")
+  admin1_lines    <- st_cast(admin1_lines,"LINESTRING")
+  
+  admin1_labels     <- st_centroid(admin1_layer)
+  
+  # gov label format --- main IRQ map
+  admin1_labels_halo <- sprintf(
+    '<strong><span style="font-size: 12px; color: %s">%s</span></strong>',
+    reach_grey, admin1_labels$ADM1_FR)%>% 
+    lapply(htmltools::HTML)
+  
+  return(admin1_labels, admin1_labels_halo)
+}
+
+# generate reach palette
+
+
+red_palette_func <- function (select_value) {
+colorNumeric(
+  na.color = reach_lt_grey,
+  palette = colorRampPalette(c("#FFE3E4", reach_red, reach_mddk_red))
+  (length(as.numeric(select_value))),
+  domain  = as.numeric(select_value))
+  
+}
